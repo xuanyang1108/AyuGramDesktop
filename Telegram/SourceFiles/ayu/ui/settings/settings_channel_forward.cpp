@@ -491,8 +491,8 @@ void BuildPage(SectionBuilder &builder) {
 		) | rpl::map([=](int) {
 			return tr::ayu_ChannelForwardToday(
 					tr::now,
-					lt_count,
-					forwarder->channelToday())
+					lt_number,
+					QString::number(forwarder->channelToday()))
 				+ u"    "_q
 				+ tr::ayu_PrivateForwardLastError(tr::now)
 				+ u" "_q
