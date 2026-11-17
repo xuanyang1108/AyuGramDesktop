@@ -92,6 +92,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ui/settings/settings_main.h"
+#include "ayu/ui/settings/settings_private_forward.h"
 #include "ayu/ui/utils/ayu_profile_values.h"
 #include "ayu/utils/telegram_helpers.h"
 
@@ -395,6 +396,12 @@ void BuildSectionButtons(SectionBuilder &builder) {
 		.targetSection = AyuMain::Id(),
 		.icon = { &st::menuIconPremium },
 		.keywords = { u"ayu"_q },
+	});
+	builder.addSectionButton({
+		.title = tr::ayu_PrivateForwardTitle(),
+		.targetSection = AyuPrivateForwardId(),
+		.icon = { &st::menuIconForward },
+		.keywords = { u"forward"_q, u"私聊"_q },
 	});
 	builder.addSkip();
 	builder.addDivider();

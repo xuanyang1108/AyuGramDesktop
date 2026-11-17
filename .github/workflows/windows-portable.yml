@@ -1,0 +1,92 @@
+# Unsigned portable Windows build for this fork.
+# It does not create a GitHub Release and does not run on every push.
+# After the secrets below exist, start it from the Actions tab.
+
+name: Windows portable
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      TDESKTOP_API_ID: ${{ secrets.TDESKTOP_API_ID }}
+      TDESKTOP_API_HASH: ${{ secrets.TDESKTOP_API_HASH }}
+    steps:
+      - name: Require API secrets
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TDESKTOP_API_ID) -or [string]::IsNullOrWhiteSpace($env:TDESKTOP_API_HASH)) {
+            Write-Error "Add repository Actions secrets TDESKTOP_API_ID and TDESKTOP_API_HASH. Use the Telegram API credentials from docs/api_credentials.md or your own from https://core.telegram.org/api/obtaining_api_id. Do not commit them."
+            exit 1
+          }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: tdesktop
+          submodules: recursive
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Build portable exe
+        shell: cmd
+        working-directory: tdesktop
+        run: |
+          setlocal
+          for /f "usebackq tokens=*" %%I in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VS=%%I
+          if not defined VS (
+            echo Visual Studio C++ tools were not found.
+            exit /b 1
+          )
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=14.44
+          if errorlevel 1 (
+            echo vcvars 14.44 failed. AyuGram's Windows instructions require MSVC 14.44 from docs/building-win.md.
+            exit /b 1
+          )
+          call Telegram\build\prepare\win.bat
+          if errorlevel 1 exit /b 1
+          cd Telegram
+          call configure.bat x64 -D TDESKTOP_API_ID=%TDESKTOP_API_ID% -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON
+          if errorlevel 1 exit /b 1
+          if exist ..\out (
+            cmake --build ..\out --config Release --target Telegram
+          ) else (
+            cmake --build out --config Release --target Telegram
+          )
+          if errorlevel 1 exit /b 1
+
+      - name: Pack portable folder
+        shell: pwsh
+        run: |
+          $roots = @(
+            "tdesktop\out\Release",
+            "tdesktop\Telegram\out\Release"
+          )
+          $found = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) {
+            Write-Error "Release output folder was not produced."
+            exit 1
+          }
+          $exe = Get-ChildItem $found -Filter *.exe | Where-Object { $_.Name -match '^(AyuGram|Telegram)\.exe$' } | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "AyuGram.exe or Telegram.exe was not produced. No installer is created by this workflow."
+            exit 1
+          }
+          Write-Host "Portable executable: $($exe.FullName)"
+          Compress-Archive -Path (Join-Path $found '*') -DestinationPath portable-windows.zip
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayugram-windows-portable
+          path: portable-windows.zip
+          if-no-files-found: error

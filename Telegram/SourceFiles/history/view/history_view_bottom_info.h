@@ -65,6 +65,7 @@ public:
 		std::optional<int> replies;
 		std::optional<int> forwardsCount;
 		Flags flags;
+		QString relayMark;
 	};
 	BottomInfo(not_null<::Data::Reactions*> reactionsOwner, Data &&data);
 	~BottomInfo();
