@@ -38,6 +38,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/private_forward/forward_controller.h"
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "styles/style_ayu_icons.h"
@@ -560,6 +561,9 @@ void BottomInfo::layoutDateText() {
 			marked.append(' ');
 		}
 		marked.append(full);
+		if (!_data.relayMark.isEmpty()) {
+			marked.append(u" "_q).append(_data.relayMark);
+		}
 		_authorEditedDate.setMarkedText(
 			st::msgDateTextStyle,
 			marked,
@@ -655,6 +659,9 @@ void BottomInfo::layoutDateText() {
 			})).append("  ");
 		}
 		marked.append(full);
+		if (!_data.relayMark.isEmpty()) {
+			marked.append(u" "_q).append(_data.relayMark);
+		}
 
 		_authorEditedDate.setMarkedText(
 			st::msgDateTextStyle,
@@ -777,6 +784,7 @@ BottomInfo::Data BottomInfoDataFromMessage(not_null<Message*> message) {
 
 	auto result = BottomInfo::Data();
 	result.date = message->dateTime();
+	result.relayMark = Ayu::PrivateForward::RelayMark(item);
 	result.effectId = item->effectId();
 	if (message->hasOutLayout()) {
 		result.flags |= Flag::OutLayout;

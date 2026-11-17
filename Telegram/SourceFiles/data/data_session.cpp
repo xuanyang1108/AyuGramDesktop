@@ -97,6 +97,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_settings.h"
 #include "ayu/data/messages_storage.h"
 #include "ayu/features/filters/filters_controller.h"
+#include "ayu/features/private_forward/forward_controller.h"
 #include "ayu/utils/telegram_helpers.h"
 
 
@@ -3126,6 +3127,7 @@ proceed:
 	}, [&](const auto &data) {
 		existing->applyEdition(HistoryMessageEdition(_session, data));
 	});
+	Ayu::PrivateForward::NotifyEdited(existing);
 }
 
 void Session::processMessages(
@@ -3434,6 +3436,7 @@ void Session::processNonChannelMessagesDeleted(const QVector<MTPint> &data) {
 	auto historiesToCheck = base::flat_set<not_null<History*>>();
 	for (const auto &messageId : data) {
 		if (const auto item = nonChannelMessage(messageId.v)) {
+			Ayu::PrivateForward::NotifyDeleted(item);
 			const auto history = item->history();
 			if (isMessageSavable(item)) {
 				processMessageDelete(item);
@@ -3676,6 +3679,9 @@ HistoryItem *Session::addNewMessage(
 		type);
 	if (type == NewMessageType::Unread) {
 		CheckForSwitchInlineButton(result);
+		if (result) {
+			Ayu::PrivateForward::NotifyNewMessage(result);
+		}
 	}
 	return result;
 }

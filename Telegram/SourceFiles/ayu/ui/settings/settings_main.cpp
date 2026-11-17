@@ -16,6 +16,8 @@
 #include "ayu/ui/settings/settings_filters.h"
 #include "ayu/ui/settings/settings_general.h"
 #include "ayu/ui/settings/settings_other.h"
+#include "ayu/ui/settings/settings_private_forward.h"
+#include "ayu/ui/settings/settings_channel_forward.h"
 #include "core/version.h"
 #include "settings/settings_builder.h"
 #include "settings/settings_common.h"
@@ -129,6 +131,16 @@ void BuildCategories(SectionBuilder &builder) {
 		.title = tr::ayu_CategoryOther(),
 		.targetSection = AyuOther::Id(),
 		.icon = { &st::menuIconFave },
+	});
+	builder.addSectionButton({
+		.title = tr::ayu_PrivateForwardTitle(),
+		.targetSection = AyuPrivateForwardId(),
+		.icon = { &st::menuIconForward },
+	});
+	builder.addSectionButton({
+		.title = tr::ayu_ChannelForwardTitle(),
+		.targetSection = AyuChannelForwardId(),
+		.icon = { &st::menuIconChannel },
 	});
 }
 
