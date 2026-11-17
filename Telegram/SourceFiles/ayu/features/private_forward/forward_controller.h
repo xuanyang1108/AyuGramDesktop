@@ -6,6 +6,7 @@
 // Copyright @Radolyn, 2026
 #pragma once
 
+#include "ayu/features/private_forward/channel_rules.h"
 #include "ayu/features/private_forward/forward_policy.h"
 #include "apiwrap.h"
 #include "main/main_session.h"
@@ -55,6 +56,29 @@ public:
 	void toggleExcluded(std::int64_t peerId);
 	void touch();
 
+	[[nodiscard]] bool channelGlobal() const;
+	void setChannelGlobal(bool enabled);
+	[[nodiscard]] const std::vector<ChannelRule> &channelRules() const;
+	[[nodiscard]] RuleError addChannelRule(
+		ChannelRule rule,
+		PeerKind sourceKind,
+		PeerKind targetKind,
+		bool targetCanSend);
+	[[nodiscard]] RuleError updateChannelRule(
+		ChannelRule rule,
+		PeerKind sourceKind,
+		PeerKind targetKind,
+		bool targetCanSend);
+	void removeChannelRule(std::int64_t id);
+	[[nodiscard]] RuleError setChannelRuleEnabled(
+		std::int64_t id,
+		bool enabled);
+	[[nodiscard]] int channelToday() const;
+	[[nodiscard]] QString channelLastError() const;
+	[[nodiscard]] std::vector<QString> channelLogLines() const;
+	[[nodiscard]] static PeerKind KindOfPeer(PeerData *peer);
+	[[nodiscard]] static bool CanSendTo(PeerData *peer);
+
 	[[nodiscard]] static QString RelayMark(not_null<HistoryItem*> item);
 
 private:
@@ -66,9 +90,11 @@ private:
 		Relay,
 		Hint,
 		Rename,
+		ChannelForward,
 	};
 	struct Job {
 		JobKind kind = JobKind::Forward;
+		std::int64_t ruleId = 0;
 		std::int64_t privatePeer = 0;
 		std::int64_t sourcePeer = 0;
 		std::int32_t topicId = 0;
@@ -91,6 +117,12 @@ private:
 	void enqueueRelay(not_null<HistoryItem*> item, bool verifiedAdmin);
 	void verifyAdmin(not_null<HistoryItem*> item);
 	void handleNew(not_null<HistoryItem*> item);
+	void handleChannel(not_null<HistoryItem*> item);
+	void enqueueChannel(
+		const Route &route,
+		std::int64_t sourcePeer,
+		const std::vector<std::int32_t> &ids);
+	void sendChannel(const Job &job);
 	void handleEdited(not_null<HistoryItem*> item);
 	void handleDeleted(not_null<HistoryItem*> item);
 	void setRelayMark(not_null<HistoryItem*> item, int mark);

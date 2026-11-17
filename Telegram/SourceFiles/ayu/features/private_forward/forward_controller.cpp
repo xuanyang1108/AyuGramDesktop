@@ -203,6 +203,13 @@ enum Mark {
 		+ u".json"_q;
 }
 
+[[nodiscard]] QString ChannelStorePath(std::int64_t accountId) {
+	return cWorkingDir()
+		+ u"tdata/ayu_channel_forward_"_q
+		+ QString::number(accountId)
+		+ u".json"_q;
+}
+
 struct SentIds {
 	std::vector<std::int32_t> ids;
 	std::int32_t topicId = 0;
@@ -354,10 +361,12 @@ auto &Controllers() {
 
 struct Controller::Private {
 	explicit Private(std::int64_t accountId)
-	: engine(accountId) {
+	: engine(accountId)
+	, channels(accountId) {
 	}
 
 	Engine engine;
+	ChannelRules channels;
 	std::deque<Controller::Job> queue;
 	bool busy = false;
 	base::Timer sendTimer;
@@ -395,6 +404,12 @@ Controller::Controller(not_null<Main::Session*> session)
 			file.readAll().toStdString(),
 			_private->engine.accountId());
 	}
+	QFile channelFile(ChannelStorePath(_private->channels.accountId()));
+	if (channelFile.open(QIODevice::ReadOnly)) {
+		_private->channels.load(
+			channelFile.readAll().toStdString(),
+			_private->channels.accountId());
+	}
 	_private->sendTimer.setCallback([=] { pump(); });
 	_private->albumTimer.setCallback([=] {
 		const auto ready = _private->engine.takeReadyAlbums(
@@ -402,6 +417,17 @@ Controller::Controller(not_null<Main::Session*> session)
 			kAlbumQuiet);
 		for (const auto &album : ready) {
 			enqueueAlbum(album.peerId, album.ids);
+		}
+		const auto channelReady = _private->channels.takeReadyAlbums(
+			crl::now(),
+			kAlbumQuiet);
+		for (const auto &album : channelReady) {
+			auto route = Route();
+			route.forward = true;
+			route.ruleId = album.ruleId;
+			route.targetPeerId = album.targetPeerId;
+			route.topicId = album.topicId;
+			enqueueChannel(route, album.peerId, album.ids);
 		}
 	});
 	_private->saveTimer.setCallback([=] { saveNow(); });
@@ -562,7 +588,19 @@ void Controller::remember(Fn<void(Settings &)> change) {
 void Controller::setEnabled(bool enabled) {
 	remember([=](Settings &settings) { settings.enabled = enabled; });
 	if (!enabled) {
-		_private->queue.clear();
+		auto &queue = _private->queue;
+		const auto keepFront = _private->busy && !queue.empty();
+		auto it = queue.begin();
+		if (keepFront) {
+			++it;
+		}
+		while (it != queue.end()) {
+			if (it->kind == JobKind::ChannelForward) {
+				++it;
+			} else {
+				it = queue.erase(it);
+			}
+		}
 	}
 }
 
@@ -661,11 +699,19 @@ void Controller::saveSoon() {
 void Controller::saveNow() {
 	_private->saveTimer.cancel();
 	QFile file(StorePath(_private->engine.accountId()));
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		const auto bytes = QByteArray::fromStdString(_private->engine.dump());
+		if (file.write(bytes) != bytes.size()) {
+			file.close();
+		}
+	}
+	QFile channelFile(ChannelStorePath(_private->channels.accountId()));
+	if (!channelFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
 		return;
 	}
-	const auto bytes = QByteArray::fromStdString(_private->engine.dump());
-	if (file.write(bytes) != bytes.size()) {
+	const auto channelBytes = QByteArray::fromStdString(
+		_private->channels.dump());
+	if (channelFile.write(channelBytes) != channelBytes.size()) {
 		return;
 	}
 }
@@ -738,8 +784,25 @@ void Controller::handleNew(not_null<HistoryItem*> item) {
 		return;
 	}
 	const auto peer = item->history()->peer;
+	if (const auto channel = peer->asChannel()) {
+		if (channel->isBroadcast()) {
+			handleChannel(item);
+			return;
+		}
+	}
 	const auto target = _private->engine.settings().targetPeerId;
 	if (target && Key(peer) == target) {
+		const auto msgId = std::int32_t(item->id.bare);
+		if (_private->channels.isProduced(Key(peer), msgId)) {
+			return;
+		}
+		if (const auto replyId = item->replyToId()) {
+			if (_private->channels.isProduced(
+					Key(peer),
+					std::int32_t(replyId.bare))) {
+				return;
+			}
+		}
 		auto message = Snapshot();
 		message.peerId = Key(peer);
 		message.msgId = std::int32_t(item->id.bare);
@@ -1056,7 +1119,12 @@ void Controller::pump() {
 	if (_private->busy || _private->queue.empty()) {
 		return;
 	}
-	if (!_private->engine.running()) {
+	const auto channelJob = _private->queue.front().kind
+		== JobKind::ChannelForward;
+	if (!channelJob && !_private->engine.running()) {
+		return;
+	}
+	if (channelJob && !_private->channels.globalEnabled()) {
 		return;
 	}
 	const auto nowUnix = base::unixtime::now();
@@ -1070,7 +1138,8 @@ void Controller::pump() {
 		return;
 	}
 	auto &job = _private->queue.front();
-	if (job.kind != JobKind::Relay) {
+	if (job.kind != JobKind::Relay
+		&& job.kind != JobKind::ChannelForward) {
 		if (const auto topic = _private->engine.topicFor(job.privatePeer)) {
 			job.topicId = *topic;
 		} else if (_private->engine.createPending(job.privatePeer)) {
@@ -1164,14 +1233,35 @@ void Controller::onSendError(const QString &type) {
 	const auto nowUnix = base::unixtime::now();
 	if (const auto seconds = FloodSeconds(type)) {
 		_private->engine.noteFlood(seconds, nowUnix);
-		_private->engine.noteError(
-			nowUnix,
-			type.toStdString(),
-			job.privatePeer,
-			msgId);
+		if (job.kind == JobKind::ChannelForward) {
+			_private->channels.noteError(
+				nowUnix,
+				type.toStdString(),
+				job.sourcePeer,
+				msgId);
+		} else {
+			_private->engine.noteError(
+				nowUnix,
+				type.toStdString(),
+				job.privatePeer,
+				msgId);
+		}
 		saveSoon();
 		touch();
 		_private->sendTimer.callOnce(crl::time(seconds + 1) * 1000);
+		return;
+	}
+	if (job.kind == JobKind::ChannelForward
+		&& (TopicGone(type) || PermissionError(type))) {
+		_private->channels.pauseRule(job.ruleId, type.toStdString());
+		_private->channels.noteError(
+			nowUnix,
+			type.toStdString(),
+			job.sourcePeer,
+			msgId);
+		_private->queue.pop_front();
+		saveSoon();
+		touch();
 		return;
 	}
 	if (TopicGone(type) && !job.recreatedTopic && job.kind != JobKind::Relay) {
@@ -1209,11 +1299,19 @@ void Controller::onSendError(const QString &type) {
 		_private->sendTimer.callOnce(crl::time(1500));
 		return;
 	}
-	_private->engine.noteError(
-		nowUnix,
-		type.toStdString(),
-		job.privatePeer,
-		msgId);
+	if (job.kind == JobKind::ChannelForward) {
+		_private->channels.noteError(
+			nowUnix,
+			type.toStdString(),
+			job.sourcePeer,
+			msgId);
+	} else {
+		_private->engine.noteError(
+			nowUnix,
+			type.toStdString(),
+			job.privatePeer,
+			msgId);
+	}
 	if (job.kind == JobKind::Relay) {
 		if (const auto item = _session->data().message(
 				PeerFromKey(job.sourcePeer),
@@ -1240,6 +1338,10 @@ void Controller::sendFront() {
 		return;
 	}
 	auto &job = _private->queue.front();
+	if (job.kind == JobKind::ChannelForward) {
+		sendChannel(job);
+		return;
+	}
 	const auto target = _session->data().peerLoaded(
 		PeerFromKey(_private->engine.settings().targetPeerId));
 	if (job.kind != JobKind::Relay && (!target || !job.topicId)) {
@@ -1302,6 +1404,28 @@ void Controller::acceptResult(const MTPUpdates &result, bool forumSide) {
 	}
 	auto job = _private->queue.front();
 	const auto sent = ReadSent(result);
+	if (job.kind == JobKind::ChannelForward) {
+		for (const auto id : sent.ids) {
+			_private->channels.rememberProduced(job.privatePeer, id);
+			if (job.privatePeer == _private->engine.settings().targetPeerId) {
+				_private->engine.rememberProducedForum(id);
+			}
+		}
+		saveNow();
+		_session->api().applyUpdates(result);
+		if (!sent.ids.empty()) {
+			_private->channels.noteSuccess(
+				Today(),
+				base::unixtime::now(),
+				job.sourcePeer,
+				job.sourceIds.empty() ? 0 : job.sourceIds.front(),
+				job.privatePeer,
+				int(job.sourceIds.size()));
+		}
+		dropFront();
+		touch();
+		return;
+	}
 	if (forumSide) {
 		for (const auto id : sent.ids) {
 			_private->engine.rememberProducedForum(id);
@@ -1615,6 +1739,321 @@ void Controller::sendCopy(PeerData *forum, const Job &job) {
 			return;
 		}
 		self->acceptResult(result, inForum);
+	})).fail(crl::guard(session, [=](const MTP::Error &error) {
+		const auto self = TryGet(session);
+		if (!self) {
+			return;
+		}
+		self->_private->busy = false;
+		self->onSendError(error.type());
+	})).send();
+}
+
+PeerKind Controller::KindOfPeer(PeerData *peer) {
+	if (!peer) {
+		return PeerKind::Other;
+	}
+	if (const auto channel = peer->asChannel()) {
+		if (channel->isBroadcast()) {
+			return PeerKind::Broadcast;
+		}
+		if (channel->isForum()) {
+			return PeerKind::Forum;
+		}
+		return PeerKind::Group;
+	}
+	if (peer->asChat()) {
+		return PeerKind::Group;
+	}
+	if (peer->asUser()) {
+		return PeerKind::User;
+	}
+	return PeerKind::Other;
+}
+
+bool Controller::CanSendTo(PeerData *peer) {
+	if (!peer || peer->isUser()) {
+		return false;
+	}
+	return Data::CanSend(peer, ChatRestriction::SendOther, false);
+}
+
+bool Controller::channelGlobal() const {
+	return _private->channels.globalEnabled();
+}
+
+void Controller::setChannelGlobal(bool enabled) {
+	_private->channels.setGlobalEnabled(enabled, base::unixtime::now());
+	if (!enabled) {
+		auto &queue = _private->queue;
+		const auto keepFront = _private->busy && !queue.empty();
+		auto it = queue.begin();
+		if (keepFront) {
+			++it;
+		}
+		while (it != queue.end()) {
+			if (it->kind == JobKind::ChannelForward) {
+				it = queue.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
+	saveSoon();
+	touch();
+	pump();
+}
+
+const std::vector<ChannelRule> &Controller::channelRules() const {
+	return _private->channels.rules();
+}
+
+RuleError Controller::addChannelRule(
+		ChannelRule rule,
+		PeerKind sourceKind,
+		PeerKind targetKind,
+		bool targetCanSend) {
+	const auto error = _private->channels.addRule(
+		std::move(rule),
+		sourceKind,
+		targetKind,
+		targetCanSend);
+	if (error == RuleError::None) {
+		saveSoon();
+		touch();
+	}
+	return error;
+}
+
+RuleError Controller::updateChannelRule(
+		ChannelRule rule,
+		PeerKind sourceKind,
+		PeerKind targetKind,
+		bool targetCanSend) {
+	const auto error = _private->channels.updateRule(
+		std::move(rule),
+		sourceKind,
+		targetKind,
+		targetCanSend);
+	if (error == RuleError::None) {
+		saveSoon();
+		touch();
+	}
+	return error;
+}
+
+void Controller::removeChannelRule(std::int64_t id) {
+	_private->channels.removeRule(id);
+	saveSoon();
+	touch();
+}
+
+RuleError Controller::setChannelRuleEnabled(std::int64_t id, bool enabled) {
+	const auto error = _private->channels.setRuleEnabled(
+		id,
+		enabled,
+		base::unixtime::now());
+	if (error == RuleError::None) {
+		saveSoon();
+		touch();
+		pump();
+	}
+	return error;
+}
+
+int Controller::channelToday() const {
+	return _private->channels.forwardedOn(Today());
+}
+
+QString Controller::channelLastError() const {
+	const auto code = QString::fromStdString(_private->channels.lastError());
+	if (code.isEmpty()) {
+		return tr::ayu_ChannelForwardNoError(tr::now);
+	}
+	if (FloodSeconds(code)) {
+		return tr::ayu_PrivateForwardErrFlood(tr::now);
+	}
+	if (PermissionError(code) || code == u"no_permission"_q) {
+		return tr::ayu_ChannelForwardNoPermission(tr::now);
+	}
+	if (TopicGone(code)) {
+		return tr::ayu_ChannelForwardTopicGone(tr::now);
+	}
+	return code;
+}
+
+std::vector<QString> Controller::channelLogLines() const {
+	auto lines = std::vector<QString>();
+	for (const auto &row : _private->channels.log()) {
+		const auto when = QDateTime::fromSecsSinceEpoch(row.ts).toString(
+			u"yyyy-MM-dd HH:mm:ss"_q);
+		lines.push_back(
+			when
+			+ u" "_q
+			+ QString::fromStdString(row.code)
+			+ u" source="_q
+			+ QString::number(row.peerId)
+			+ u" msg="_q
+			+ QString::number(row.msgId)
+			+ u" target="_q
+			+ QString::number(row.targetPeerId));
+	}
+	return lines;
+}
+
+void Controller::handleChannel(not_null<HistoryItem*> item) {
+	auto message = ChannelMessage();
+	message.peerId = Key(item->history()->peer);
+	message.msgId = std::int32_t(item->id.bare);
+	message.groupedId = std::int64_t(item->groupId().raw());
+	message.dateUnix = item->date();
+	message.broadcast = true;
+	message.service = item->isService();
+	message.protectedContent = IsProtected(item);
+	if (const auto channel = item->history()->peer->asChannel()) {
+		message.sourceAccessible = channel->amIn();
+	}
+	if (const auto forwarded = item->Get<HistoryMessageForwarded>()) {
+		message.forwarded = true;
+		if (forwarded->originalSender) {
+			message.forwardFromPeer = Key(forwarded->originalSender);
+		}
+		message.forwardFromMsg = std::int32_t(forwarded->originalId.bare);
+	}
+	const auto routes = _private->channels.route(
+		message,
+		[=](std::int64_t targetId) {
+			const auto peer = _session->data().peerLoaded(PeerFromKey(targetId));
+			return peer && CanSendTo(peer);
+		});
+	for (const auto &route : routes) {
+		if (!route.forward) {
+			if (route.skip == ChannelSkip::NoPermission) {
+				_private->channels.pauseRule(route.ruleId, "no_permission");
+			}
+			if (route.skip == ChannelSkip::Protected
+				|| route.skip == ChannelSkip::NoPermission
+				|| route.skip == ChannelSkip::Deleted) {
+				_private->channels.noteError(
+					base::unixtime::now(),
+					route.skip == ChannelSkip::Protected
+						? "protected"
+						: route.skip == ChannelSkip::Deleted
+						? "source_gone"
+						: "no_permission",
+					message.peerId,
+					message.msgId);
+				saveSoon();
+				touch();
+			}
+			continue;
+		}
+		if (message.groupedId) {
+			_private->channels.addGrouped(route, message, crl::now());
+			_private->albumTimer.callOnce(kAlbumQuiet);
+			continue;
+		}
+		enqueueChannel(route, message.peerId, { message.msgId });
+	}
+}
+
+void Controller::enqueueChannel(
+		const Route &route,
+		std::int64_t sourcePeer,
+		const std::vector<std::int32_t> &ids) {
+	if (!route.forward || ids.empty() || !_private->channels.globalEnabled()) {
+		return;
+	}
+	auto claimed = std::vector<std::int32_t>();
+	for (const auto id : ids) {
+		if (!_private->channels.claim(route.ruleId, sourcePeer, id)) {
+			for (const auto taken : claimed) {
+				_private->channels.release(route.ruleId, sourcePeer, taken);
+			}
+			return;
+		}
+		claimed.push_back(id);
+	}
+	auto job = Job();
+	job.kind = JobKind::ChannelForward;
+	job.ruleId = route.ruleId;
+	job.sourcePeer = sourcePeer;
+	job.privatePeer = route.targetPeerId;
+	job.topicId = route.topicId;
+	job.sourceIds = ids;
+	for (auto i = 0; i < int(ids.size()); ++i) {
+		job.randomIds.push_back(base::RandomValue<std::uint64_t>() | 1);
+	}
+	if (int(_private->queue.size()) >= kQueueCap) {
+		for (const auto id : ids) {
+			_private->channels.release(route.ruleId, sourcePeer, id);
+		}
+		_private->channels.noteError(
+			base::unixtime::now(),
+			"queue_overflow",
+			sourcePeer,
+			ids.front());
+		saveSoon();
+		touch();
+		return;
+	}
+	_private->queue.push_back(std::move(job));
+	pump();
+}
+
+void Controller::sendChannel(const Job &job) {
+	const auto from = _session->data().peerLoaded(PeerFromKey(job.sourcePeer));
+	const auto target = _session->data().peerLoaded(
+		PeerFromKey(job.privatePeer));
+	if (!from || !target || job.sourceIds.empty() || !CanSendTo(target)) {
+		_private->channels.pauseRule(
+			job.ruleId,
+			(!target || (target && !CanSendTo(target)))
+				? "no_permission"
+				: "message_gone");
+		_private->channels.noteError(
+			base::unixtime::now(),
+			(!from || job.sourceIds.empty()) ? "message_gone" : "no_permission",
+			job.sourcePeer,
+			job.sourceIds.empty() ? 0 : job.sourceIds.front());
+		dropFront();
+		touch();
+		return;
+	}
+	auto ids = QVector<MTPint>();
+	auto randomIds = QVector<MTPlong>();
+	for (const auto id : job.sourceIds) {
+		ids.push_back(MTP_int(id));
+	}
+	for (const auto randomId : job.randomIds) {
+		randomIds.push_back(MTP_long(randomId));
+	}
+	const auto useTopic = job.topicId > 1;
+	using Flag = MTPmessages_ForwardMessages::Flag;
+	const auto session = _session;
+	_private->busy = true;
+	session->api().request(MTPmessages_ForwardMessages(
+		MTP_flags(useTopic ? Flag::f_top_msg_id : Flag(0)),
+		from->input(),
+		MTP_vector<MTPint>(ids),
+		MTP_vector<MTPlong>(randomIds),
+		target->input(),
+		MTP_int(useTopic ? job.topicId : 0),
+		MTPInputReplyTo(),
+		MTPint(),
+		MTPint(),
+		MTP_inputPeerEmpty(),
+		MTPInputQuickReplyShortcut(),
+		MTP_long(0),
+		MTPint(),
+		MTP_long(0),
+		Api::SuggestToMTP({})
+	)).done(crl::guard(session, [=](const MTPUpdates &result) {
+		const auto self = TryGet(session);
+		if (!self) {
+			return;
+		}
+		self->acceptResult(result, false);
 	})).fail(crl::guard(session, [=](const MTP::Error &error) {
 		const auto self = TryGet(session);
 		if (!self) {

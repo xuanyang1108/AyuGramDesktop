@@ -155,6 +155,8 @@ set(ayugram_files
         ayu/ui/settings/settings_chats.h
         ayu/ui/settings/settings_private_forward.cpp
         ayu/ui/settings/settings_private_forward.h
+        ayu/ui/settings/settings_channel_forward.cpp
+        ayu/ui/settings/settings_channel_forward.h
         ayu/ui/settings/settings_general.cpp
         ayu/ui/settings/settings_general.h
         ayu/ui/settings/settings_ayu.cpp
@@ -231,6 +233,8 @@ set(ayugram_files
         ayu/features/private_forward/forward_policy.h
         ayu/features/private_forward/forward_controller.cpp
         ayu/features/private_forward/forward_controller.h
+        ayu/features/private_forward/channel_rules.cpp
+        ayu/features/private_forward/channel_rules.h
         ayu/features/forward/ayu_forward_rich.cpp
         ayu/features/forward/ayu_forward_rich.h
         ayu/features/forward/ayu_sync.cpp

@@ -1,5 +1,6 @@
 # Unsigned portable Windows build for this fork.
 # It does not create a GitHub Release and does not run on every push.
+# Channel forwarding uses the same build. No extra secrets or libraries.
 # After the secrets below exist, start it from the Actions tab.
 
 name: Windows portable
