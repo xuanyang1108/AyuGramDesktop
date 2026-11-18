@@ -490,8 +490,8 @@ void BuildPage(SectionBuilder &builder) {
 		.label = LiveText(forwarder, [=] {
 			return tr::ayu_PrivateForwardExcludeCount(
 				tr::now,
-				lt_count,
-				int(forwarder->settings().excluded.size()));
+				lt_number,
+				QString::number(int(forwarder->settings().excluded.size())));
 		}),
 		.onClick = [=] {
 			auto picker = std::make_unique<ExcludeController>(
@@ -511,8 +511,8 @@ void BuildPage(SectionBuilder &builder) {
 	builder.addDividerText(LiveText(forwarder, [=] {
 		return tr::ayu_PrivateForwardToday(
 				tr::now,
-				lt_count,
-				forwarder->todayCount())
+				lt_number,
+				QString::number(forwarder->todayCount()))
 			+ u"    "_q
 			+ tr::ayu_PrivateForwardLastError(tr::now)
 			+ u" "_q

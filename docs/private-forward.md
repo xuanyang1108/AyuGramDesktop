@@ -115,4 +115,4 @@ g++ -std=c++20 -I Telegram/SourceFiles \
 /tmp/channel_rules_test
 ```
 
-这次结果是 `ok`。Windows 便携包还没有构建，Actions 里的 “Windows portable” 仍要手动运行，步骤没有变，也不需要新的密钥。
+这次结果是 `ok`。Windows 便携包还没有构建。Actions 里的 “Windows portable” 仍要手动运行，不需要新的密钥。准备依赖时安装的是 MSYS2 仍提供的 `mingw-w64-ucrt-x86_64-diffutils`，因为旧的 `mingw-w64-x86_64-diffutils` 已从仓库删除。

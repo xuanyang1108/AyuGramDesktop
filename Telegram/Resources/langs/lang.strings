@@ -9231,8 +9231,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_PrivateForwardIgnoreBots" = "忽略机器人";
 "ayu_PrivateForwardIgnoreMuted" = "忽略已静音的私聊";
 "ayu_PrivateForwardExcludeList" = "排除列表";
-"ayu_PrivateForwardExcludeCount" = "{count} 人";
-"ayu_PrivateForwardToday" = "今日已转发 {count} 条";
+"ayu_PrivateForwardExcludeCount" = "{number} 人";
+"ayu_PrivateForwardToday" = "今日已转发 {number} 条";
 "ayu_PrivateForwardLastError" = "最近错误";
 "ayu_PrivateForwardNoError" = "无";
 "ayu_PrivateForwardLog" = "查看日志";
@@ -9280,7 +9280,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_ChannelForwardMissing" = "请先选好来源和目标。";
 "ayu_ChannelForwardEmpty" = "还没有规则。";
 "ayu_ChannelForwardPaused" = "已暂停";
-"ayu_ChannelForwardToday" = "今日已转发 {count} 条";
+"ayu_ChannelForwardToday" = "今日已转发 {number} 条";
 "ayu_ChannelForwardLogTitle" = "频道转发日志";
 "ayu_ChannelForwardNoError" = "无";
 "ayu_ChannelForwardNoPermission" = "没有在目标里发言的权限";
