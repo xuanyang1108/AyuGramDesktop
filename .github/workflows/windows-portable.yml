@@ -22,10 +22,27 @@ jobs:
       - name: Require API secrets
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:TDESKTOP_API_ID) -or [string]::IsNullOrWhiteSpace($env:TDESKTOP_API_HASH)) {
+          $id = if ($null -eq $env:TDESKTOP_API_ID) { "" } else { $env:TDESKTOP_API_ID.Trim() }
+          $hash = if ($null -eq $env:TDESKTOP_API_HASH) { "" } else { $env:TDESKTOP_API_HASH.Trim() }
+          if ([string]::IsNullOrWhiteSpace($id) -or [string]::IsNullOrWhiteSpace($hash)) {
             Write-Error "Add repository Actions secrets TDESKTOP_API_ID and TDESKTOP_API_HASH. Use the Telegram API credentials from docs/api_credentials.md or your own from https://core.telegram.org/api/obtaining_api_id. Do not commit them."
             exit 1
           }
+          if ($id -notmatch '^[0-9]{1,10}$' -or $id -eq '0') {
+            Write-Error "TDESKTOP_API_ID must be the numeric api_id only. Digits, no quotes, labels, spaces, or the api_hash. The last build compiled this value as a name instead of a number."
+            exit 1
+          }
+          if ($hash -notmatch '^[0-9a-fA-F]{32}$') {
+            Write-Error "TDESKTOP_API_HASH must be the 32-character hex api_hash only. No quotes, labels, spaces, or the numeric api_id."
+            exit 1
+          }
+          $cache = Join-Path $env:RUNNER_TEMP 'tdesktop-api.cmake'
+          @(
+            "set(TDESKTOP_API_ID `"$id`" CACHE STRING `"api id`" FORCE)"
+            "set(TDESKTOP_API_HASH `"$hash`" CACHE STRING `"api hash`" FORCE)"
+            "set(DESKTOP_APP_DISABLE_AUTOUPDATE ON CACHE BOOL `"disable autoupdate`" FORCE)"
+          ) | Set-Content -Path $cache -Encoding ascii
+          "TDESKTOP_API_CACHE=$($cache -replace '\\','/')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,7 +73,11 @@ jobs:
           call Telegram\build\prepare\win.bat
           if errorlevel 1 exit /b 1
           cd Telegram
-          call configure.bat x64 -D TDESKTOP_API_ID=%TDESKTOP_API_ID% -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON
+          if not defined TDESKTOP_API_CACHE (
+            echo API cache file was not prepared.
+            exit /b 1
+          )
+          call configure.bat x64 -C "%TDESKTOP_API_CACHE%"
           if errorlevel 1 exit /b 1
           if exist ..\out (
             cmake --build ..\out --config Release --target Telegram
